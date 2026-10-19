@@ -344,12 +344,12 @@ else:
             theta=['風險偏好', '財務承受力', '投資熟悉度'],
             fill='toself',
             fillcolor='rgba(6, 182, 212, 0.25)',
-            line=dict(color='#000000', width=2)
+            line=dict(color='#06b6d4', width=2)
         ))
         fig_radar.update_layout(
             polar=dict(
                 radialaxis=dict(visible=True, range=[0, 100], color="#64748b"),
-                angularaxis=dict(color="#cbd5e1"),
+                angularaxis=dict(color="black"),
                 bgcolor="rgba(0,0,0,0)"
             ),
             paper_bgcolor="rgba(0,0,0,0)",
@@ -375,41 +375,66 @@ else:
 
     st.divider()
 
-    #=====================================================
-    # 功能 1：效率前緣圖 (加上保守/穩健/積極風險區間背景與高亮)
-    #=====================================================
-    st.subheader("📈 1. 效率前緣曲線與最佳化落點 (Efficient Frontier)")
-    st.caption("背景區塊已標註三大風險屬性區間，醒目發光區域代表與您投資者輪廓相符之推薦落點範圍。")
+    # =====================================================
+    # 功能 1：效率前緣圖與三大組合概念解說
+    # =====================================================
+    st.subheader("📈 1. 效率前緣曲線與三大經典組合解析")
+    
+    # 概念說明卡片
+    st.markdown("""
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 20px;">
+        <h4 style="margin-top:0; color:#0f172a;">💡 三大經典投資組合是什麼？</h4>
+        <ul style="color:#334155; line-height: 1.8; font-size: 14px; margin-bottom: 0;">
+            <li><b>♦ 最小變異組合 (MVP, Minimum Variance Portfolio)：</b>全市場<b>波動度最小、風險最低</b>的組合（位於效率前緣最左端）。追求資產抗跌與本金安全，適合無法忍受帳面起伏的保守投資人。</li>
+            <li><b>▲ 最高夏普組合 (Tangency Portfolio)：</b>每承擔 1 單位波動風險所換得超額報酬最高的組合（即<b>投資 CP 值最高點</b>）。是現代投資組合理論中資本配置線的切點。</li>
+            <li><b>★ 您的最適配置組合 (Optimal Portfolio)：</b>由系統根據您的<b>風險偏好、年齡與資金耐受力</b>，透過二次效用最佳化模型量身算出的落點，追求在您最舒適的心態下獲得最高預期收益。</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 比較差異簡表
+    comp_data = {
+        "指標 / 組合": ["最小變異組合 (MVP)", "最高夏普組合 (Tangency)", "您的專屬最適組合 (Optimal)"],
+        "核心哲學": ["本金安全第一，波動最小", "報酬風險性價比最高 (CP值最高)", "量身定制，心理拿得最安穩"],
+        "波動風險 (σ)": [f"{mvp_vol*100:.1f} % (最低)", f"{tan_vol*100:.1f} % (中高)", f"{opt_vol*100:.1f} % (最適化)"],
+        "年化預期報酬": [f"{mvp_r*100:.1f} %", f"{tan_r*100:.1f} %", f"{opt_r*100:.1f} %"],
+        "適合族群": ["極度保守、即期退休族", "追求市場長期效率之穩健族", f"當前匹配：{investor_type.split()[0]}"]
+    }
+    st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+
+    st.caption("下方圖表背景之「保守 / 穩健 / 積極」區間已精確對齊量化問卷邊界，高亮色彩區域為您目前所屬的風險帶。")
+
+    # 動態計算「與問卷邊界完全一致」的波動率切點（徹底消除落點與屬性不一致問題）
+    _, _, vol_c_edge = optimize_portfolio_for_user(0.0)      # 最極端保守點 (分數 0)
+    _, _, vol_cm_cut = optimize_portfolio_for_user(33.33)    # 保守 / 穩健 分界線 (分數 33.3)
+    _, _, vol_ma_cut = optimize_portfolio_for_user(66.66)    # 穩健 / 積極 分界線 (分數 66.6)
+    _, _, vol_a_edge = optimize_portfolio_for_user(100.0)    # 最極端積極點 (分數 100)
+
+    # 圖表整體 X 軸範疇
+    all_vols = [v * 100 for v in ef_vols] + [mvp_vol * 100, tan_vol * 100, opt_vol * 100]
+    x_chart_min = min(all_vols) * 0.95
+    x_chart_max = max(all_vols) * 1.05
+
+    # 定義精確的三大風險區間（百分比 %）
+    risk_zones = [
+        {"name": "保守型", "x0": x_chart_min, "x1": vol_cm_cut * 100, "color": "#10b981", "type_key": "保守型"},
+        {"name": "穩健型", "x0": vol_cm_cut * 100, "x1": vol_ma_cut * 100, "color": "#06b6d4", "type_key": "穩健型"},
+        {"name": "積極型", "x0": vol_ma_cut * 100, "x1": x_chart_max, "color": "#f43f5e", "type_key": "積極型"}
+    ]
 
     fig_ef = go.Figure()
 
-    # 計算風險區間範圍 (以波動率 Volatility % 為基準進行劃分)
-    all_vols = [v * 100 for v in ef_vols] + [mvp_vol * 100, tan_vol * 100, opt_vol * 100]
-    min_v = min(all_vols)
-    max_v = max(all_vols)
-    span = max_v - min_v
-    x_start = max(0.0, min_v - span * 0.05)
-    x_end = max_v + span * 0.08
-    cut1 = x_start + (x_end - x_start) / 3.0
-    cut2 = x_start + (x_end - x_start) * 2.0 / 3.0
-
-    risk_zones = [
-        {"name": "保守型", "x0": x_start, "x1": cut1, "color": "#10b981", "type_key": "保守型"},
-        {"name": "穩健型", "x0": cut1, "x1": cut2, "color": "#06b6d4", "type_key": "穩健型"},
-        {"name": "積極型", "x0": cut2, "x1": x_end, "color": "#f43f5e", "type_key": "積極型"}
-    ]
-
-    # 加入背景區間遮罩 (當前對應類型套用高對比醒目色彩與實線框)
+    # 繪製背景分區遮罩
     for rz in risk_zones:
-        is_matched = (rz["type_key"]in investor_type)
+        is_matched = (rz["type_key"] in investor_type)
         if is_matched:
-            # 醒目高亮樣式
+            # 符合當前投資人類型：醒目高亮與實線外框
             if rz["type_key"] == "保守型":
-                bg_color = "rgba(16, 185, 129, 0.25)"
+                bg_color = "rgba(16, 185, 129, 0.22)"
             elif rz["type_key"] == "穩健型":
-                bg_color = "rgba(6, 182, 212, 0.25)"
+                bg_color = "rgba(6, 182, 212, 0.22)"
             else:
-                bg_color = "rgba(244, 63, 94, 0.25)"
+                bg_color = "rgba(244, 63, 94, 0.22)"
 
             fig_ef.add_vrect(
                 x0=rz["x0"], x1=rz["x1"],
@@ -421,10 +446,10 @@ else:
                 annotation_font=dict(color=rz["color"], size=13, family="Segoe UI")
             )
         else:
-            # 非所屬類型淡化背景
+            # 非所屬類型：淡化呈現
             fig_ef.add_vrect(
                 x0=rz["x0"], x1=rz["x1"],
-                fillcolor="rgba(148, 163, 184, 0.07)",
+                fillcolor="rgba(148, 163, 184, 0.06)",
                 layer="below",
                 line=dict(color="rgba(148, 163, 184, 0.3)", width=1, dash="dot"),
                 annotation_text=f"{rz['name']}風險區",
@@ -432,7 +457,7 @@ else:
                 annotation_font=dict(color="#94a3b8", size=11, family="Segoe UI")
             )
 
-    # 效率前緣曲線
+    # 繪製效率前緣線
     fig_ef.add_trace(go.Scatter(
         x=[v * 100 for v in ef_vols], y=[r * 100 for r in ef_rets],
         mode='lines', name='效率前緣 (Efficient Frontier)',
@@ -452,7 +477,7 @@ else:
         marker=dict(color='#d97706', size=12, symbol='triangle-up'),
         text=['Tangency'], textposition='bottom right'
     ))
-    # 使用者最適落點
+    # 最適落點
     fig_ef.add_trace(go.Scatter(
         x=[opt_vol * 100], y=[opt_r * 100],
         mode='markers+text', name='您的最適配置組合',
@@ -466,7 +491,7 @@ else:
         plot_bgcolor="rgba(0,0,0,0)",
         xaxis_title="年化波動率 / 風險 (σ %)",
         yaxis_title="年化預期報酬率 (E(R) %)",
-        xaxis=dict(range=[x_start, x_end], showgrid=True, gridcolor="#e2e8f0"),
+        xaxis=dict(range=[x_chart_min, x_chart_max], showgrid=True, gridcolor="#e2e8f0"),
         yaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
         height=480,
         legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center")
