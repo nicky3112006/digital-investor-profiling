@@ -38,23 +38,23 @@ st.markdown("""
 <style>
     /* 深色背景與字體 */
     .stApp {
-        background-color: #0b1120;
-        color: #f1f5f9;
+        background-color: #f8fafc;
+        color: #1e293b;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     /* 卡片式容器 */
     .card {
-        background-color: #131d35;
-        border: 1px solid #1e293b;
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
         border-radius: 16px;
         padding: 24px;
         margin-bottom: 20px;
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
     }
     .badge {
-        background: #083344;
-        color: #22d3ee;
-        border: 1px solid #0e7490;
+        background: #e0f2fe;
+        color: #0369a1;
+        border: 1px solid #7dd3fc;
         padding: 4px 12px;
         border-radius: 9999px;
         font-size: 12px;
@@ -62,8 +62,8 @@ st.markdown("""
     }
     /* 美化單選按鈕 */
     div[role="radiogroup"] > label {
-        background-color: #0f172a;
-        border: 1px solid #1e293b;
+        background-color: #ffffff;
+        border: 1px solid #cbd5e1;
         padding: 12px 18px;
         border-radius: 12px;
         margin-bottom: 10px;
@@ -71,7 +71,7 @@ st.markdown("""
     }
     div[role="radiogroup"] > label:hover {
         border-color: #06b6d4;
-        background-color: #162032;
+        background-color: #f0f9ff;
     }
     /* 按鈕樣式 */
     .stButton>button {
@@ -118,20 +118,6 @@ def load_and_compute_mpt():
         assets = list(returns.columns)
         mean_ret = returns.mean().values * TRADING_DAYS
         cov_matrix = returns.cov().values * TRADING_DAYS
-        return assets, mean_ret, cov_matrix
-    else:
-        # 備用資產基準
-        assets = ["2330 台積電", "0050 元大台灣50", "0056 元大高股息", "2881 富邦金", "00679B 元大美債20年"]
-        mean_ret = np.array([0.185, 0.132, 0.088, 0.105, 0.038])
-        stds = np.array([0.24, 0.18, 0.14, 0.16, 0.09])
-        corr = np.array([
-            [1.00, 0.82, 0.55, 0.48, -0.05],
-            [0.82, 1.00, 0.70, 0.62, -0.02],
-            [0.55, 0.70, 1.00, 0.52, 0.08],
-            [0.48, 0.62, 0.52, 1.00, 0.10],
-            [-0.05, -0.02, 0.08, 0.10, 1.00]
-        ])
-        cov_matrix = np.outer(stds, stds) * corr
         return assets, mean_ret, cov_matrix
 
 ASSETS, MEAN_RETURNS, COV_MATRIX = load_and_compute_mpt()
@@ -255,7 +241,6 @@ if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
 # 標題區
-st.markdown('<div class="badge">Academic Final Project</div>', unsafe_allow_html=True)
 st.title("🤖 理財機器人：數位投資者輪廓 × MPT 資產配置系統")
 st.caption("結合 Investor Risk Profiling、行為財務學分析與現代投資組合理論（MPT）動態求解最適權重。")
 
@@ -356,8 +341,6 @@ else:
         <span class="badge">評估結果確認</span>
         <h2 style="color:white; margin:8px 0;">{investor_type}</h2>
         <p style="color:#94a3b8; font-size:14px; margin:0;">
-            依據您的問卷風險偏好分數，由 Python <code>scipy.optimize</code> 動態求解馬科維茨效用最大化最佳權重，絕無寫死。
-        </p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -408,86 +391,183 @@ else:
 
     st.divider()
 
-    # =====================================================
-    # 功能 1：效率前緣圖 (標記 MVP、Tangency 與最佳落點)
-    # =====================================================
+    #=====================================================
+    # 功能 1：效率前緣圖 (加上保守/穩健/積極風險區間背景與高亮)
+    #=====================================================
     st.subheader("📈 1. 效率前緣曲線與最佳化落點 (Efficient Frontier)")
-    st.caption("曲線由歷史每日報酬與共變異數矩陣二次規劃計算求得；星號代表符合您風險屬性的最適組合。")
+    st.caption("背景區塊已標註三大風險屬性區間，醒目發光區域代表與您投資者輪廓相符之推薦落點範圍。")
 
     fig_ef = go.Figure()
-    # 效率前緣
+
+    # 計算風險區間範圍 (以波動率 Volatility % 為基準進行劃分)
+    all_vols = [v * 100 for v in ef_vols] + [mvp_vol * 100, tan_vol * 100, opt_vol * 100]
+    min_v = min(all_vols)
+    max_v = max(all_vols)
+    span = max_v - min_v
+    x_start = max(0.0, min_v - span * 0.05)
+    x_end = max_v + span * 0.08
+    cut1 = x_start + (x_end - x_start) / 3.0
+    cut2 = x_start + (x_end - x_start) * 2.0 / 3.0
+
+    risk_zones = [
+        {"name": "保守型", "x0": x_start, "x1": cut1, "color": "#10b981", "type_key": "保守型"},
+        {"name": "穩健型", "x0": cut1, "x1": cut2, "color": "#06b6d4", "type_key": "穩健型"},
+        {"name": "積極型", "x0": cut2, "x1": x_end, "color": "#f43f5e", "type_key": "積極型"}
+    ]
+
+    # 加入背景區間遮罩 (當前對應類型套用高對比醒目色彩與實線框)
+    for rz in risk_zones:
+        is_matched = (rz["type_key"] == inv_cat)
+        if is_matched:
+            # 醒目高亮樣式
+            if rz["type_key"] == "保守型":
+                bg_color = "rgba(16, 185, 129, 0.25)"
+            elif rz["type_key"] == "穩健型":
+                bg_color = "rgba(6, 182, 212, 0.25)"
+            else:
+                bg_color = "rgba(244, 63, 94, 0.25)"
+
+            fig_ef.add_vrect(
+                x0=rz["x0"], x1=rz["x1"],
+                fillcolor=bg_color,
+                layer="below",
+                line=dict(color=rz["color"], width=2.5),
+                annotation_text=f"<b>★ 您的屬性區間：{rz['name']} ★</b>",
+                annotation_position="top left",
+                annotation_font=dict(color=rz["color"], size=13, family="Segoe UI")
+            )
+        else:
+            # 非所屬類型淡化背景
+            fig_ef.add_vrect(
+                x0=rz["x0"], x1=rz["x1"],
+                fillcolor="rgba(148, 163, 184, 0.07)",
+                layer="below",
+                line=dict(color="rgba(148, 163, 184, 0.3)", width=1, dash="dot"),
+                annotation_text=f"{rz['name']}風險區",
+                annotation_position="top left",
+                annotation_font=dict(color="#94a3b8", size=11, family="Segoe UI")
+            )
+
+    # 效率前緣曲線
     fig_ef.add_trace(go.Scatter(
         x=[v * 100 for v in ef_vols], y=[r * 100 for r in ef_rets],
         mode='lines', name='效率前緣 (Efficient Frontier)',
-        line=dict(color='#38bdf8', width=3)
+        line=dict(color='#0284c7', width=3)
     ))
     # MVP 點
     fig_ef.add_trace(go.Scatter(
         x=[mvp_vol * 100], y=[mvp_r * 100],
         mode='markers+text', name='最小變異組合 (MVP)',
-        marker=dict(color='#f43f5e', size=12, symbol='diamond'),
+        marker=dict(color='#e11d48', size=12, symbol='diamond'),
         text=['MVP'], textposition='top left'
     ))
     # Tangency 點
     fig_ef.add_trace(go.Scatter(
         x=[tan_vol * 100], y=[tan_r * 100],
         mode='markers+text', name='最高夏普 (Tangency)',
-        marker=dict(color='#fbbf24', size=12, symbol='triangle-up'),
+        marker=dict(color='#d97706', size=12, symbol='triangle-up'),
         text=['Tangency'], textposition='bottom right'
     ))
-    # 使用者落點
+    # 使用者最適落點
     fig_ef.add_trace(go.Scatter(
         x=[opt_vol * 100], y=[opt_r * 100],
         mode='markers+text', name='您的最適配置組合',
-        marker=dict(color='#10b981', size=16, symbol='star'),
+        marker=dict(color='#059669', size=16, symbol='star', line=dict(color='#ffffff', width=1.5)),
         text=['★ 最適推薦點'], textposition='top center'
     ))
+
     fig_ef.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         xaxis_title="年化波動率 / 風險 (σ %)",
         yaxis_title="年化預期報酬率 (E(R) %)",
-        height=450,
-        legend=dict(orientation="h", y=-0.2)
+        xaxis=dict(range=[x_start, x_end], showgrid=True, gridcolor="#e2e8f0"),
+        yaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
+        height=480,
+        legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center")
     )
     st.plotly_chart(fig_ef, use_container_width=True)
-
     # =====================================================
     # 功能 2：資金與經驗設定
     # =====================================================
     st.subheader("💰 2. 總投資金額設定")
     total_capital = st.number_input(
         "請填寫預計投入之總金額 (TWD)：",
-        min_value=10000, max_value=100000000, value=500000, step=50000
+        min_value=1000, max_value=100000000, value=500000, step=50000
     )
 
     # =====================================================
     # 功能 3：互動式配置表與甜甜圈圖
     # =====================================================
     st.subheader("🥧 3. 最適資產配置權重表與圓餅圖")
-    st.caption("標的完全來自真實歷史資料。您可以拉動拉桿微調權重，下方金額與圖表將即時更新。")
+    st.caption("權重總和嚴格限定為 100%。若拉動拉桿發現無法增加，代表目前總權重已滿，需先調降其他標的釋出額度。")
+
+    # 初始化配置權重（首次載入時以最適解進行整數配平，確保初始總和必定為 100）
+    if "user_weights" not in st.session_state or st.session_state.get("cached_risk_norm") != risk_norm:
+        raw_pct = opt_weights * 100.0
+        base_weights = np.floor(raw_pct).astype(int)
+        remainder = int(100 - np.sum(base_weights))
+        fractions = raw_pct - base_weights
+        sorted_indices = np.argsort(-fractions)
+        for i in range(remainder):
+            base_weights[sorted_indices[i]] += 1
+        st.session_state.user_weights = {ASSETS[i]: int(base_weights[i]) for i in range(NUM_ASSETS)}
+        st.session_state.cached_risk_norm = risk_norm
 
     col_sliders, col_chart = st.columns([1, 1])
-    user_weights = {}
 
     with col_sliders:
         st.write("##### 各標的配置比例 (可微調)：")
-        for idx, ticker in enumerate(ASSETS):
-            init_w = int(round(opt_weights[idx] * 100))
-            user_weights[ticker] = st.slider(
-                f"{ticker}", min_value=0, max_value=100, value=init_w, step=1, key=f"sl_{ticker}"
-            )
-        total_w = sum(user_weights.values())
-        if total_w == 100:
-            st.success(f"✅ 權重總和：100% (完美平衡)")
+        current_sum = sum(st.session_state.user_weights.values())
+
+        # 即時狀態與鎖定警示
+        if current_sum >= 100:
+            st.markdown("""
+            <div style="background-color: #fef2f2; border: 1.5px solid #ef4444; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;">
+                <span style="color: #b91c1c; font-weight: 700; font-size: 13.5px;">
+                    🔒 目前總權重已達 100%（上限已鎖定）
+                </span><br>
+                <span style="color: #7f1d1d; font-size: 12.5px;">
+                    若欲調高特定標的，請先將其他標的之拉桿調低以釋出額度。
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.warning(f"⚠️ 權重總和：{total_w}% (建議調整至 100%)")
+            remaining = 100 - current_sum
+            st.markdown(f"""
+            <div style="background-color: #f0fdf4; border: 1.5px solid #22c55e; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;">
+                <span style="color: #15803d; font-weight: 700; font-size: 13.5px;">
+                    ⚡ 目前總權重：{current_sum}%（尚有 {remaining}% 可供分配）
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 動態計算每個拉桿的 max_value，嚴格杜絕超過 100%
+        for ticker in ASSETS:
+            curr_val = st.session_state.user_weights[ticker]
+            other_sum = sum(st.session_state.user_weights[t] for t in ASSETS if t != ticker)
+            allowed_max = max(curr_val, 100 - other_sum)
+
+            # 當該標的無法再增加時，給出提示文字
+            is_locked = (curr_val == allowed_max and current_sum >= 100)
+            tag = " 🔒 (已達上限)" if is_locked else ""
+
+            new_val = st.slider(
+                f"{ticker}{tag}",
+                min_value=0,
+                max_value=int(allowed_max),
+                value=int(curr_val),
+                step=1,
+                key=f"slider_{ticker}"
+            )
+            # 即時同步回 session_state
+            st.session_state.user_weights[ticker] = new_val
 
     # 配置明細表
     portfolio_rows = []
     for ticker in ASSETS:
-        w = user_weights[ticker]
+        w = st.session_state.user_weights[ticker]
         amount = int(round(total_capital * (w / 100.0)))
         portfolio_rows.append({"證券標的": ticker, "配置權重 (%)": f"{w} %", "配置金額 (TWD)": f"{amount:,} 元", "數值權重": w})
     df_port = pd.DataFrame(portfolio_rows)
@@ -501,7 +581,7 @@ else:
             marker=dict(colors=['#06b6d4', '#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899'])
         )])
         fig_donut.update_layout(
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
             showlegend=False,
             height=340,
@@ -517,4 +597,7 @@ else:
         st.session_state.submitted = False
         st.session_state.current_q = 0
         st.session_state.answers = {}
+        st.rerun()
+        if "user_weights" in st.session_state:
+            del st.session_state["user_weights"]
         st.rerun()
