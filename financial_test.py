@@ -167,7 +167,21 @@ def optimize_portfolio_for_user(risk_score_norm):
     res = sco.minimize(utility, init, method='SLSQP', bounds=bounds, constraints=cons)
     r, vol = port_perf(res.x, MEAN_RETURNS, COV_MATRIX)
     return res.x, r, vol
-
+# ---------------------------------------------------------
+# [新增] 計算三種代表性基準投資人（保守 15分、穩健 50分、積極 85分）
+# ---------------------------------------------------------
+@st.cache_data
+def get_three_benchmark_profiles():
+    benchmarks = {
+        "Conservative (保守型)": 15.0,
+        "Moderate (穩健型)": 50.0,
+        "Aggressive (積極型)": 85.0
+    }
+    results = {}
+    for name, score in benchmarks.items():
+        w, r, vol = optimize_portfolio_for_user(score)
+        results[name] = {"weights": w, "ret": r, "vol": vol, "score": score}
+    return results
 # =========================================================
 # 3. 完整 20 題問卷題庫
 # =========================================================
@@ -396,82 +410,78 @@ else:
         {"name": "積極型", "x0": vol_ma_cut * 100, "x1": x_chart_max, "color": "#f43f5e", "type_key": "積極型"}
     ]
 
+    # =====================================================
+    # [新] Figure 1. 效率前緣與三種投資人落點標註
+    # =====================================================
+    benchmarks = get_three_benchmark_profiles()
+
     fig_ef = go.Figure()
 
-    # 繪製背景分區遮罩
+    # 1. 背景分區遮罩（保留你原本設計的高質感分區）
     for rz in risk_zones:
         is_matched = (rz["type_key"] in investor_type)
-        if is_matched:
-            # 符合當前投資人類型：醒目高亮與實線外框
-            if rz["type_key"] == "保守型":
-                bg_color = "rgba(16, 185, 129, 0.22)"
-            elif rz["type_key"] == "穩健型":
-                bg_color = "rgba(6, 182, 212, 0.22)"
-            else:
-                bg_color = "rgba(244, 63, 94, 0.22)"
+        bg_color = "rgba(6, 182, 212, 0.18)" if is_matched else "rgba(148, 163, 184, 0.05)"
+        fig_ef.add_vrect(
+            x0=rz["x0"], x1=rz["x1"],
+            fillcolor=bg_color, layer="below",
+            line=dict(color=rz["color"] if is_matched else "rgba(148, 163, 184, 0.25)", width=2 if is_matched else 1),
+            annotation_text=f"{rz['name']}", annotation_position="top left",
+            annotation_font=dict(color=rz["color"] if is_matched else "#94a3b8", size=11)
+        )
 
-            fig_ef.add_vrect(
-                x0=rz["x0"], x1=rz["x1"],
-                fillcolor=bg_color,
-                layer="below",
-                line=dict(color=rz["color"], width=2.5),
-                annotation_text=f"<b>★ 您的屬性區間：{rz['name']} ★</b>",
-                annotation_position="top left",
-                annotation_font=dict(color=rz["color"], size=13, family="Segoe UI")
-            )
-        else:
-            # 非所屬類型：淡化呈現
-            fig_ef.add_vrect(
-                x0=rz["x0"], x1=rz["x1"],
-                fillcolor="rgba(148, 163, 184, 0.06)",
-                layer="below",
-                line=dict(color="rgba(148, 163, 184, 0.3)", width=1, dash="dot"),
-                annotation_text=f"{rz['name']}風險區",
-                annotation_position="top left",
-                annotation_font=dict(color="#94a3b8", size=11, family="Segoe UI")
-            )
-
-    # 繪製效率前緣線
+    # 2. 效率前緣曲線
     fig_ef.add_trace(go.Scatter(
         x=[v * 100 for v in ef_vols], y=[r * 100 for r in ef_rets],
         mode='lines', name='效率前緣 (Efficient Frontier)',
-        line=dict(color='#0284c7', width=3)
+        line=dict(color='#0284c7', width=3.5)
     ))
-    # MVP 點
+
+    # 3. 作業核心要求：標記三大標準投資人類型落點 (Figure 1)
+    pts_config = {
+        "Conservative (保守型)": {"color": "#10b981", "symbol": "circle", "pos": "top left"},
+        "Moderate (穩健型)": {"color": "#06b6d4", "symbol": "square", "pos": "top center"},
+        "Aggressive (積極型)": {"color": "#f43f5e", "symbol": "diamond", "pos": "bottom right"}
+    }
+    for p_name, cfg in pts_config.items():
+        data = benchmarks[p_name]
+        fig_ef.add_trace(go.Scatter(
+            x=[data["vol"] * 100], y=[data["ret"] * 100],
+            mode='markers+text', name=p_name,
+            marker=dict(color=cfg["color"], size=13, symbol=cfg["symbol"], line=dict(color="#ffffff", width=1.5)),
+            text=[p_name.split()[0]], textposition=cfg["pos"],
+            textfont=dict(color=cfg["color"], size=12, family="Segoe UI")
+        ))
+
+    # 4. MVP 與 Tangency 輔助點
     fig_ef.add_trace(go.Scatter(
         x=[mvp_vol * 100], y=[mvp_r * 100],
-        mode='markers+text', name='最小變異組合 (MVP)',
-        marker=dict(color='#e11d48', size=12, symbol='diamond'),
-        text=['MVP'], textposition='top left'
+        mode='markers', name='MVP (最小變異)',
+        marker=dict(color='#64748b', size=9, symbol='x')
     ))
-    # Tangency 點
-    fig_ef.add_trace(go.Scatter(
-        x=[tan_vol * 100], y=[tan_r * 100],
-        mode='markers+text', name='最高夏普 (Tangency)',
-        marker=dict(color='#d97706', size=12, symbol='triangle-up'),
-        text=['Tangency'], textposition='bottom right'
-    ))
-    # 最適落點
+
+    # 5. 當前填答者專屬落點
     fig_ef.add_trace(go.Scatter(
         x=[opt_vol * 100], y=[opt_r * 100],
-        mode='markers+text', name='您的最適配置組合',
-        marker=dict(color='#059669', size=16, symbol='star', line=dict(color='#ffffff', width=1.5)),
-        text=['★ 最適推薦點'], textposition='top center'
+        mode='markers+text', name='★ 您的評測落點',
+        marker=dict(color='#8b5cf6', size=16, symbol='star', line=dict(color='#ffffff', width=2)),
+        text=['★ 您的落點'], textposition='top right',
+        textfont=dict(color='#8b5cf6', size=13)
     ))
 
     fig_ef.update_layout(
+        title="<b>Figure 1. Efficient Frontier and Investor-Specific Optimal Portfolios</b>",
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        xaxis_title="年化波動率 / 風險 (σ %)",
-        yaxis_title="年化預期報酬率 (E(R) %)",
+        xaxis_title="Portfolio Risk / 年化波動率 (σ %)",
+        yaxis_title="Expected Return / 年化預期報酬率 (E(R) %)",
         xaxis=dict(range=[x_chart_min, x_chart_max], showgrid=True, gridcolor="#e2e8f0"),
         yaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
         height=480,
-        legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center")
+        legend=dict(orientation="h", y=-0.22, x=0.5, xanchor="center")
     )
     st.plotly_chart(fig_ef, use_container_width=True)
-    st.caption("上方圖表背景之「保守 / 穩健 / 積極」區間已精確對齊量化問卷邊界，高亮色彩區域為您目前所屬的風險帶。")
+    st.caption("▲ 圖表已標示作業規定之 Conservative、Moderate、Aggressive 三大標準落點，以及您專屬的最適投資組合點。")
     st.subheader("📈 1. 效率前緣曲線與三大經典組合解析")
     # 概念說明卡片
     st.markdown("""
@@ -494,6 +504,48 @@ else:
         "適合族群": ["極度保守、即期退休族", "追求市場長期效率之穩健族", f"當前匹配：{investor_type.split()[0]}"]
     }
     st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+    # =====================================================
+    # [新增] Figure 2. 資產配置橫向堆疊比較圖 (作業必備)
+    # =====================================================
+    st.markdown("---")
+    st.subheader("📊 Figure 2. Optimal Asset Allocation by Investor Profile")
+    st.caption("由 Python 二次規劃求解之三種風險屬性（Conservative、Moderate、Aggressive）及當前使用者的最適權重分佈對照圖。")
+
+    palette = ['#0284c7', '#0d9488', '#16a34a', '#ca8a04', '#ea580c', '#e11d48', '#9333ea', '#64748b']
+    y_categories = ["Conservative", "Moderate", "Aggressive", "★ Your Profile"]
+    fig_alloc = go.Figure()
+
+    for idx, ticker in enumerate(ASSETS):
+        x_percentages = [
+            round(benchmarks["Conservative (保守型)"]["weights"][idx] * 100, 1),
+            round(benchmarks["Moderate (穩健型)"]["weights"][idx] * 100, 1),
+            round(benchmarks["Aggressive (積極型)"]["weights"][idx] * 100, 1),
+            round(opt_weights[idx] * 100, 1)
+        ]
+        fig_alloc.add_trace(go.Bar(
+            y=y_categories,
+            x=x_percentages,
+            name=str(ticker),
+            orientation='h',
+            marker=dict(color=palette[idx % len(palette)]),
+            text=[f"{v:.1f}%" if v >= 5 else "" for v in x_percentages],
+            textposition='inside',
+            insidetextanchor='middle'
+        ))
+
+    fig_alloc.update_layout(
+        barmode='stack',
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(title="資產配置權重百分比 (%)", range=[0, 100], showgrid=True, gridcolor="#e2e8f0"),
+        yaxis=dict(autorange="reversed"),
+        height=320,
+        margin=dict(l=20, r=20, t=30, b=30),
+        legend=dict(orientation="h", y=-0.3, x=0.5, xanchor="center")
+    )
+    st.plotly_chart(fig_alloc, use_container_width=True)
+    st.markdown("---")
     # =====================================================
     # 功能 2：資金與經驗設定
     # =====================================================
