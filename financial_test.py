@@ -503,8 +503,8 @@ else:
         min_value=1000, max_value=100000000, value=500000, step=50000
     )
 
-    # =====================================================
-    # 功能 3：互動式配置表與甜甜圈圖
+   # =====================================================
+    # 功能 3：互動式配置表與甜甜圈圖（嚴格鎖定 100% 機制 - 防呆修復版）
     # =====================================================
     st.subheader("🥧 3. 最適資產配置權重表與圓餅圖")
     st.caption("權重總和嚴格限定為 100%。若拉動拉桿發現無法增加，代表目前總權重已滿，需先調降其他標的釋出額度。")
@@ -518,7 +518,12 @@ else:
         sorted_indices = np.argsort(-fractions)
         for i in range(remainder):
             base_weights[sorted_indices[i]] += 1
-        st.session_state.user_weights = {ASSETS[i]: int(base_weights[i]) for i in range(NUM_ASSETS)}
+        
+        st.session_state.user_weights = {}
+        for i, ticker in enumerate(ASSETS):
+            w = int(base_weights[i])
+            st.session_state.user_weights[ticker] = w
+            st.session_state[f"slider_{ticker}"] = w
         st.session_state.cached_risk_norm = risk_norm
 
     col_sliders, col_chart = st.columns([1, 1])
@@ -535,7 +540,7 @@ else:
                     🔒 目前總權重已達 100%（上限已鎖定）
                 </span><br>
                 <span style="color: #7f1d1d; font-size: 12.5px;">
-                    若欲調高特定標的，請先將其他標的之拉桿調低以釋出額度。
+                    若欲調高特定標的，請先將其他標的之拉桿調低以釋出可用額度。
                 </span>
             </div>
             """, unsafe_allow_html=True)
@@ -549,28 +554,45 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        # 動態計算每個拉桿的 max_value，嚴格杜絕超過 100%
+        # 動態計算每個拉桿的 max_value，避免 min_value == max_value 錯誤
         for ticker in ASSETS:
-            curr_val = st.session_state.user_weights[ticker]
+            slider_key = f"slider_{ticker}"
+            curr_val = st.session_state.user_weights.get(ticker, 0)
             other_sum = sum(st.session_state.user_weights[t] for t in ASSETS if t != ticker)
             allowed_max = max(curr_val, 100 - other_sum)
 
-            # 當該標的無法再增加時，給出提示文字
-            is_locked = (curr_val == allowed_max and current_sum >= 100)
-            tag = " 🔒 (已達上限)" if is_locked else ""
+            # 情況 A：額度為 0 且無法調高（使用 disabled 鎖定，避免 min == max 報錯）
+            if allowed_max <= 0:
+                st.slider(
+                    f"{ticker} 🔒 (目前為 0%，總額已滿無可用額度)",
+                    min_value=0,
+                    max_value=100,
+                    value=0,
+                    disabled=True,
+                    key=f"{slider_key}_disabled"
+                )
+                st.session_state.user_weights[ticker] = 0
+            
+            # 情況 B：正常可調節（allowed_max >= 1）
+            else:
+                is_capped = (curr_val == allowed_max and current_sum >= 100)
+                tag = " 🔒 (已達上限)" if is_capped else ""
 
-            new_val = st.slider(
-                f"{ticker}{tag}",
-                min_value=0,
-                max_value=int(allowed_max),
-                value=int(curr_val),
-                step=1,
-                key=f"slider_{ticker}"
-            )
-            # 即時同步回 session_state
-            st.session_state.user_weights[ticker] = new_val
+                # 防止 session_state 內部值暫時大於 allowed_max
+                if slider_key in st.session_state and st.session_state[slider_key] > allowed_max:
+                    st.session_state[slider_key] = int(allowed_max)
 
-    # 配置明細表
+                new_val = st.slider(
+                    f"{ticker}{tag}",
+                    min_value=0,
+                    max_value=int(allowed_max),
+                    value=int(curr_val),
+                    step=1,
+                    key=slider_key
+                )
+                st.session_state.user_weights[ticker] = new_val
+
+    # 彙整即時明細表
     portfolio_rows = []
     for ticker in ASSETS:
         w = st.session_state.user_weights[ticker]
@@ -603,7 +625,9 @@ else:
         st.session_state.submitted = False
         st.session_state.current_q = 0
         st.session_state.answers = {}
-        st.rerun()
         if "user_weights" in st.session_state:
             del st.session_state["user_weights"]
+        for ticker in ASSETS:
+            if f"slider_{ticker}" in st.session_state:
+                del st.session_state[f"slider_{ticker}"]
         st.rerun()
