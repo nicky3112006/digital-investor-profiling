@@ -378,32 +378,6 @@ else:
     # =====================================================
     # 功能 1：效率前緣圖與三大組合概念解說
     # =====================================================
-    st.subheader("📈 1. 效率前緣曲線與三大經典組合解析")
-    
-    # 概念說明卡片
-    st.markdown("""
-    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 20px;">
-        <h4 style="margin-top:0; color:#0f172a;">💡 三大經典投資組合是什麼？</h4>
-        <ul style="color:#334155; line-height: 1.8; font-size: 14px; margin-bottom: 0;">
-            <li><b>♦ 最小變異組合 (MVP, Minimum Variance Portfolio)：</b>全市場<b>波動度最小、風險最低</b>的組合（位於效率前緣最左端）。追求資產抗跌與本金安全，適合無法忍受帳面起伏的保守投資人。</li>
-            <li><b>▲ 最高夏普組合 (Tangency Portfolio)：</b>每承擔 1 單位波動風險所換得超額報酬最高的組合（即<b>投資 CP 值最高點</b>）。是現代投資組合理論中資本配置線的切點。</li>
-            <li><b>★ 您的最適配置組合 (Optimal Portfolio)：</b>由系統根據您的<b>風險偏好、年齡與資金耐受力</b>，透過二次效用最佳化模型量身算出的落點，追求在您最舒適的心態下獲得最高預期收益。</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # 比較差異簡表
-    comp_data = {
-        "指標 / 組合": ["最小變異組合 (MVP)", "最高夏普組合 (Tangency)", "您的專屬最適組合 (Optimal)"],
-        "核心哲學": ["本金安全第一，波動最小", "報酬風險性價比最高 (CP值最高)", "量身定制，心理拿得最安穩"],
-        "波動風險 (σ)": [f"{mvp_vol*100:.1f} % (最低)", f"{tan_vol*100:.1f} % (中高)", f"{opt_vol*100:.1f} % (最適化)"],
-        "年化預期報酬": [f"{mvp_r*100:.1f} %", f"{tan_r*100:.1f} %", f"{opt_r*100:.1f} %"],
-        "適合族群": ["極度保守、即期退休族", "追求市場長期效率之穩健族", f"當前匹配：{investor_type.split()[0]}"]
-    }
-    st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
-
-    st.caption("下方圖表背景之「保守 / 穩健 / 積極」區間已精確對齊量化問卷邊界，高亮色彩區域為您目前所屬的風險帶。")
-
     # 動態計算「與問卷邊界完全一致」的波動率切點（徹底消除落點與屬性不一致問題）
     _, _, vol_c_edge = optimize_portfolio_for_user(0.0)      # 最極端保守點 (分數 0)
     _, _, vol_cm_cut = optimize_portfolio_for_user(33.33)    # 保守 / 穩健 分界線 (分數 33.3)
@@ -497,6 +471,29 @@ else:
         legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center")
     )
     st.plotly_chart(fig_ef, use_container_width=True)
+    st.caption("上方圖表背景之「保守 / 穩健 / 積極」區間已精確對齊量化問卷邊界，高亮色彩區域為您目前所屬的風險帶。")
+    st.subheader("📈 1. 效率前緣曲線與三大經典組合解析")
+    # 概念說明卡片
+    st.markdown("""
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 20px;">
+        <h4 style="margin-top:0; color:#0f172a;">💡 三大經典投資組合是什麼？</h4>
+        <ul style="color:#334155; line-height: 1.8; font-size: 14px; margin-bottom: 0;">
+            <li><b>♦ 最小變異組合 (MVP, Minimum Variance Portfolio)：</b>全市場<b>波動度最小、風險最低</b>的組合（位於效率前緣最左端）。追求資產抗跌與本金安全，適合無法忍受帳面起伏的保守投資人。</li>
+            <li><b>▲ 最高夏普組合 (Tangency Portfolio)：</b>每承擔 1 單位波動風險所換得超額報酬最高的組合（即<b>投資 CP 值最高點</b>）。是現代投資組合理論中資本配置線的切點。</li>
+            <li><b>★ 您的最適配置組合 (Optimal Portfolio)：</b>由系統根據您的<b>風險偏好、年齡與資金耐受力</b>，透過二次效用最佳化模型量身算出的落點，追求在您最舒適的心態下獲得最高預期收益。</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 比較差異簡表
+    comp_data = {
+        "指標 / 組合": ["最小變異組合 (MVP)", "最高夏普組合 (Tangency)", "您的專屬最適組合 (Optimal)"],
+        "核心哲學": ["本金安全第一，波動最小", "報酬風險性價比最高 (CP值最高)", "量身定制，心理拿得最安穩"],
+        "波動風險 (σ)": [f"{mvp_vol*100:.1f} % (最低)", f"{tan_vol*100:.1f} % (中高)", f"{opt_vol*100:.1f} % (最適化)"],
+        "年化預期報酬": [f"{mvp_r*100:.1f} %", f"{tan_r*100:.1f} %", f"{opt_r*100:.1f} %"],
+        "適合族群": ["極度保守、即期退休族", "追求市場長期效率之穩健族", f"當前匹配：{investor_type.split()[0]}"]
+    }
+    st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
     # =====================================================
     # 功能 2：資金與經驗設定
     # =====================================================
