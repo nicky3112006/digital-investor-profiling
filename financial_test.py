@@ -388,7 +388,57 @@ else:
             st.info(text)
 
     st.divider()
+    # ==================================================
+    # [新增] 作業目標 3：資產報酬率、共變異數矩陣與投資組合風險展示
+    # =====================================================
+    with st.expander("📌 查看核心金融數據：資產報酬率、風險、共變異數矩陣與投資組合風險公式", expanded=False):
+        st.markdown("#### 1. 個別標的年化預期報酬率與波動度")
+        # 計算個別資產年化標準差
+        asset_vols = [np.sqrt(COV_MATRIX[i, i]) for i in range(NUM_ASSETS)]
+        df_asset_stat = pd.DataFrame({
+            "證券標的代碼": ASSETS,
+            "年化預期報酬率 (E(R))": [f"{r * 100:.2f} %" for r in MEAN_RETURNS],
+            "年化波動度 (標準差 σ)": [f"{v * 100:.2f} %" for v in asset_vols],
+            "個別夏普值 (Rf=1.5%)": [f"{(r - 0.015) / v:.2f}" for r, v in zip(MEAN_RETURNS, asset_vols)]
+        })
+        st.dataframe(df_asset_stat, use_container_width=True, hide_index=True)
 
+        col_cov, col_corr = st.columns(2)
+        with col_cov:
+            st.markdown("#### 2. 年化共變異數矩陣 (Covariance Matrix, Σ)")
+            st.caption("反映不同資產間價格變動的連動程度（單位：年化變異數）。")
+            df_cov = pd.DataFrame(COV_MATRIX, index=ASSETS, columns=ASSETS)
+            # 格式化呈現小數點後 5 位
+            st.dataframe(df_cov.style.format("{:.5f}"), use_container_width=True)
+
+        with col_corr:
+            st.markdown("#### 3. 資產相關係數熱力圖 (Correlation Matrix)")
+            st.caption("相關係數介於 -1 到 +1 之間，數值越低越能發揮資產配置的分散風險效果。")
+            std_diag = np.sqrt(np.diag(COV_MATRIX))
+            corr_matrix = COV_MATRIX / np.outer(std_diag, std_diag)
+            
+            fig_corr = go.Figure(data=go.Heatmap(
+                z=corr_matrix,
+                x=ASSETS,
+                y=ASSETS,
+                colorscale="Blues",
+                zmin=-1, zmax=1,
+                text=np.around(corr_matrix, 2),
+                texttemplate="%{text}",
+                showscale=True
+            ))
+            fig_corr.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+        st.markdown("#### 4. 投資組合風險與報酬計算數學公式驗證")
+        st.latex(r"E(R_p) = \mathbf{w}^T \boldsymbol{\mu} = \sum_{i=1}^N w_i E(R_i)")
+        st.latex(r"\sigma_p = \sqrt{\mathbf{w}^T \boldsymbol{\Sigma} \mathbf{w}} = \sqrt{\sum_{i=1}^N \sum_{j=1}^N w_i w_j \sigma_{ij}}")
+        st.info(f"""
+        **當前最適投資組合數值實證結果：**
+        * 投資組合預期年化報酬率 $E(R_p)$：**{opt_r * 100:.2f} %**
+        * 投資組合年化波動風險 $\sigma_p$：**{opt_vol * 100:.2f} %**
+        * 夏普比率 (Sharpe Ratio, 無風險利率 1.5%)：**{(opt_r - 0.015) / opt_vol:.2f}**
+        """)
     # =====================================================
     # 功能 1：效率前緣圖與三大組合概念解說
     # =====================================================
