@@ -187,7 +187,9 @@ def load_market_inputs(return_dates):
 
 try:
     (RISK_FREE_RATE, MARKET_RISK_PREMIUM, RATE_SOURCE_FILE,
-     RATE_OBSERVATIONS, RATE_START_DATE, RATE_END_DATE) = load_market_inputs(RETURNS_DF.index)
+     RATE_OBSERVATIONS, RATE_START_DATE, RATE_END_DATE) = load_market_inputs(
+         tuple(RETURNS_DF.index.strftime("%Y-%m-%d"))
+     )
 except Exception as exc:
     st.error(f"無法載入無風險利率／市場風險溢酬：{exc}")
     st.stop()
