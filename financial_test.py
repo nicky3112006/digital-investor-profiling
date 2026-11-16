@@ -1096,23 +1096,37 @@ else:
     st.subheader("🥧 3. 最適資產配置權重表與圓餅圖")
     st.caption("權重總和嚴格限定為 100%。若拉動拉桿發現無法增加，代表目前總權重已滿，需先調降其他標的釋出額度。")
 
-    # 初始化配置權重（首次載入時以最適解進行整數配平，確保初始總和必定為 100）
-    if "user_weights" not in st.session_state or st.session_state.get("cached_risk_norm") != risk_norm:
+    # 股票清單或風險分數改變時，重新初始化配置權重
+    saved_weights = st.session_state.get("user_weights", {})
+    saved_assets = set(saved_weights.keys())
+    current_assets = set(ASSETS)
+
+    if (
+        saved_assets != current_assets
+        or st.session_state.get("cached_risk_norm") != risk_norm
+    ):
+        # 移除舊股票對應的拉桿狀態
+        for ticker in saved_assets - current_assets:
+            old_slider_key = f"slider_{ticker}"
+            if old_slider_key in st.session_state:
+                del st.session_state[old_slider_key]
+
         raw_pct = opt_weights * 100.0
         base_weights = np.floor(raw_pct).astype(int)
         remainder = int(100 - np.sum(base_weights))
         fractions = raw_pct - base_weights
         sorted_indices = np.argsort(-fractions)
+
         for i in range(remainder):
             base_weights[sorted_indices[i]] += 1
-        
+
         st.session_state.user_weights = {}
         for i, ticker in enumerate(ASSETS):
-            w = int(base_weights[i])
-            st.session_state.user_weights[ticker] = w
-            st.session_state[f"slider_{ticker}"] = w
-        st.session_state.cached_risk_norm = risk_norm
+            weight = int(base_weights[i])
+            st.session_state.user_weights[ticker] = weight
+            st.session_state[f"slider_{ticker}"] = weight
 
+        st.session_state.cached_risk_norm = risk_norm
     col_sliders, col_chart = st.columns([1, 1])
 
     with col_sliders:
@@ -1145,7 +1159,11 @@ else:
         for ticker in ASSETS:
             slider_key = f"slider_{ticker}"
             curr_val = st.session_state.user_weights.get(ticker, 0)
-            other_sum = sum(st.session_state.user_weights[t] for t in ASSETS if t != ticker)
+            other_sum = sum(
+                st.session_state.user_weights.get(t, 0)
+                for t in ASSETS
+                if t != ticker
+            )
             allowed_max = max(curr_val, 100 - other_sum)
 
             # 情況 A：額度為 0 且無法調高（使用 disabled 鎖定，避免 min == max 報錯）
