@@ -77,41 +77,84 @@ st.markdown("""
 
 TRADING_DAYS = 252
 
-# =========================================================
-# 2. 作業二核心 MPT 引擎（自動讀取理財機器人投資組合.csv）
-# =========================================================
-@st.cache_data
-def load_and_compute_mpt():
-    file_path = "理財機器人投資組合.csv"
-    if os.path.exists(file_path):
-        with open(file_path, "rb") as f:
-            encoding = chardet.detect(f.read(100000))["encoding"]
-        try:
-            df = pd.read_csv(file_path, encoding=encoding, sep="\t")
-            if "收盤價(元)" not in df.columns:
-                df = pd.read_csv(file_path, encoding=encoding)
-        except Exception:
-            df = pd.read_csv(file_path)
-
-        df["年月日"] = pd.to_datetime(df["年月日"], format="%Y%m%d", errors="coerce")
-        df = df.dropna(subset=["年月日"])
-        df["收盤價(元)"] = pd.to_numeric(df["收盤價(元)"], errors="coerce")
-        data = df.pivot(index="年月日", columns="證券代碼", values="收盤價(元)").sort_index().ffill()
-        returns = data.pct_change().dropna(how="any")
-
-        assets = list(returns.columns)
-        mean_ret = returns.mean().values * TRADING_DAYS
-        cov_matrix = returns.cov().values * TRADING_DAYS
-        return assets, mean_ret, cov_matrix
-
-ASSETS, MEAN_RETURNS, COV_MATRIX = load_and_compute_mpt()
+DATA_SOURCE_FILE = None
+ASSETS, MEAN_RETURNS, COV_MATRIX, RETURNS_DF = load_and_compute_mpt()
 NUM_ASSETS = len(ASSETS)
+
+
+@st.cache_data
+def load_market_inputs(return_dates):
+    """
+    從同資料夾 Excel 的「利率」工作表讀取無風險利率與市場風險溢酬。
+    無風險利率欄位以年百分比表示；市場風險溢酬欄位視為每日百分比，
+    先與資產報酬日期對齊，再以平均每日值 × 252 轉成年化報酬率。
+    """
+    import glob
+
+    patterns = ("*理財機器人投資組合*.xlsx", "*.xlsx")
+    candidates = []
+    for pattern in patterns:
+        for path in sorted(glob.glob(pattern)):
+            if path not in candidates and os.path.isfile(path):
+                candidates.append(path)
+
+    if not candidates:
+        raise FileNotFoundError(
+            "找不到 Excel 利率資料。請將含有「利率」工作表的 .xlsx 檔案放在 Python 程式同一資料夾。"
+        )
+
+    last_error = None
+    for file_path in candidates:
+        try:
+            rate_df = pd.read_excel(file_path, sheet_name="利率", engine="openpyxl")
+            required = {"年月日", "無風險利率", "市場風險溢酬"}
+            if not required.issubset(rate_df.columns):
+                raise ValueError(f"「利率」工作表缺少欄位：{required - set(rate_df.columns)}")
+
+            date_text = rate_df["年月日"].astype(str).str.replace(r"\\.0$", "", regex=True).str.strip()
+            rate_df["年月日"] = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
+            rate_df["無風險利率"] = pd.to_numeric(rate_df["無風險利率"], errors="coerce")
+            rate_df["市場風險溢酬"] = pd.to_numeric(rate_df["市場風險溢酬"], errors="coerce")
+            rate_df = rate_df.dropna(subset=["年月日", "無風險利率", "市場風險溢酬"])
+            rate_df = rate_df.drop_duplicates("年月日", keep="last").set_index("年月日").sort_index()
+
+            aligned = rate_df.reindex(pd.DatetimeIndex(return_dates)).dropna(
+                subset=["無風險利率", "市場風險溢酬"]
+            )
+            if len(aligned) < 30:
+                raise ValueError("Excel 利率資料與資產報酬資料的有效重疊日期不足 30 筆。")
+
+            # TEJ 欄位數值如 0.795、1.700，代表年化百分比；轉成小數。
+            risk_free_rate = float(aligned["無風險利率"].mean() / 100.0)
+            # 市場風險溢酬欄位為每日百分比；平均後乘 252 轉成年化小數。
+            market_risk_premium = float(aligned["市場風險溢酬"].mean() * TRADING_DAYS / 100.0)
+
+            if not np.isfinite(risk_free_rate) or not np.isfinite(market_risk_premium):
+                raise ValueError("無風險利率或市場風險溢酬計算結果不是有效數值。")
+            return risk_free_rate, market_risk_premium, file_path, len(aligned), aligned.index.min(), aligned.index.max()
+        except Exception as exc:
+            last_error = exc
+
+    raise ValueError(f"無法讀取 Excel 的「利率」工作表：{last_error}")
+
+
+try:
+    (RISK_FREE_RATE, MARKET_RISK_PREMIUM, RATE_SOURCE_FILE,
+     RATE_OBSERVATIONS, RATE_START_DATE, RATE_END_DATE) = load_market_inputs(RETURNS_DF.index)
+except Exception as exc:
+    st.error(f"無法載入無風險利率／市場風險溢酬：{exc}")
+    st.stop()
+
+st.sidebar.caption(f"資產資料：{os.path.basename(DATA_SOURCE_FILE)}")
+st.sidebar.caption(f"利率資料：{os.path.basename(RATE_SOURCE_FILE)}")
+st.sidebar.caption(f"年化無風險利率：{RISK_FREE_RATE:.2%}｜年化市場風險溢酬：{MARKET_RISK_PREMIUM:.2%}")
+
 
 def port_perf(weights, mean_returns, cov_matrix):
     r = np.dot(weights, mean_returns)
     vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
     return r, vol
-
+    
 # 最小變異數組合 (MVP)
 def get_mvp():
     bounds = tuple((0.0, 1.0) for _ in range(NUM_ASSETS))
@@ -152,6 +195,84 @@ def get_efficient_frontier(points=35):
             vols.append(np.sqrt(res.fun))
             rets.append(t_ret)
     return vols, rets
+
+# 作業四：Black-Litterman 模型函數
+# =========================================================
+def calculate_market_prior(mean_returns, cov_matrix, market_weights,
+                           market_risk_premium, risk_free_rate=RISK_FREE_RATE):
+    """使用 Excel 提供的年化市場風險溢酬估計 δ，並計算隱含均衡報酬 Π。"""
+    weights = np.asarray(market_weights, dtype=float)
+    weights = weights / weights.sum()
+    mu = np.asarray(mean_returns, dtype=float)
+    cov = np.asarray(cov_matrix, dtype=float)
+
+    market_return = float(weights @ mu)
+    market_variance = float(weights @ cov @ weights)
+    if market_variance <= 1e-12:
+        raise ValueError("市場投資組合變異數過小，無法估計風險趨避係數。")
+
+    # δ = 市場風險溢酬 / 市場投資組合變異數；兩者均為年化數值。
+    raw_delta = float(market_risk_premium) / market_variance
+    # δ 必須為正值；若樣本平均市場風險溢酬非正，採用小幅正值下限並揭露。
+    delta = max(float(raw_delta), 0.10)
+    equilibrium_returns = delta * cov @ weights
+    return equilibrium_returns, delta, market_return, market_variance, raw_delta
+
+
+def build_absolute_views(assets, selected_assets, view_returns, confidences, cov_matrix, tau=0.05):
+    """
+    建立絕對觀點：
+    每一列 P 對應一項資產，Q 為該資產的年化預期報酬。
+    Ω 使用信心比例轉換的不確定性近似值；信心越高，Ω 越小。
+    """
+    if not selected_assets:
+        return np.empty((0, len(assets))), np.array([]), np.empty((0, 0))
+
+    p_rows, q_values, omega_values = [], [], []
+    cov = np.asarray(cov_matrix, dtype=float)
+
+    for asset in selected_assets:
+        idx = assets.index(asset)
+        row = np.zeros(len(assets))
+        row[idx] = 1.0
+        p_rows.append(row)
+        q_values.append(float(view_returns[asset]))
+
+        confidence = float(np.clip(confidences[asset], 0.05, 0.95))
+        view_variance = float(row @ cov @ row.T)
+        # 教學/介面用的信心轉換近似式，不宣稱為唯一標準校準法。
+        omega_i = ((1.0 - confidence) / confidence) * tau * max(view_variance, 1e-10)
+        omega_values.append(max(omega_i, 1e-10))
+
+    P = np.vstack(p_rows)
+    Q = np.asarray(q_values, dtype=float)
+    Omega = np.diag(omega_values)
+    return P, Q, Omega
+
+
+def calculate_black_litterman(pi, cov_matrix, P, Q, Omega, tau=0.05):
+    """依 BL 後驗報酬公式計算 μ_BL，使用 pseudo-inverse 增加數值穩定性。"""
+    pi = np.asarray(pi, dtype=float)
+    cov = np.asarray(cov_matrix, dtype=float)
+
+    if P.size == 0:
+        return pi.copy()
+
+    tau_cov = tau * cov
+    tau_cov_inv = np.linalg.pinv(tau_cov)
+    omega_inv = np.linalg.pinv(Omega)
+
+    posterior_precision = tau_cov_inv + P.T @ omega_inv @ P
+    posterior_cov = np.linalg.pinv(posterior_precision)
+    posterior_mean = posterior_cov @ (
+        tau_cov_inv @ pi + P.T @ omega_inv @ Q
+    )
+    return np.asarray(posterior_mean, dtype=float)
+
+def calculate_portfolio_sharpe(portfolio_return, portfolio_vol, risk_free_rate=RISK_FREE_RATE):
+    if portfolio_vol <= 1e-12:
+        return 0.0
+    return (portfolio_return - risk_free_rate) / portfolio_vol
 
 # 根據問卷分數透過效用函數 (Utility Maximization) 動態求解
 def optimize_portfolio_for_user(risk_score_norm):
@@ -332,6 +453,156 @@ else:
     mvp_w, mvp_r, mvp_vol = get_mvp()
     tan_w, tan_r, tan_vol = get_tangency()
     ef_vols, ef_rets = get_efficient_frontier()
+
+    # =====================================================
+    # 作業四：Black-Litterman 個人化投資觀點設定
+    # =====================================================
+    st.markdown("---")
+    st.header("🧭 作業四：Black–Litterman 個人化投資觀點")
+    st.caption("保留原有 20 題問卷與 MPT；使用者可調整投資觀點及信心水準，再由 BL 模型更新預期報酬。")
+
+    BL_TAU = 0.05
+    st.caption(
+        f"利率資料期間：{RATE_START_DATE:%Y-%m-%d} 至 {RATE_END_DATE:%Y-%m-%d}，"
+        f"有效對齊 {RATE_OBSERVATIONS} 個交易日。無風險利率取對齊期間平均年化值；"
+        "市場風險溢酬取每日欄位平均後乘以 252 年化。"    
+    )
+
+    with st.expander("① 市場權重設定（Market Portfolio Weights）", expanded=True):
+        st.warning(
+            "市場權重仍以六項投資標的等權重作為代理（或由使用者自行輸入），不是台灣整體市場的真實市值權重。"
+            "無風險利率與市場風險溢酬則改由 Excel「利率」工作表讀取，並依日期與資產報酬資料對齊。"
+        )
+        market_weight_mode = st.radio(
+            "選擇市場權重來源",
+            ["等權重代理（預設）", "自行輸入市場權重"],
+            horizontal=True,
+            key="bl_market_weight_mode"
+        )
+
+        if market_weight_mode == "等權重代理（預設）":
+            market_weights = np.ones(NUM_ASSETS, dtype=float) / NUM_ASSETS
+            st.write("目前每項資產權重：", "、".join([f"{a}: {w:.2%}" for a, w in zip(ASSETS, market_weights)]))
+        else:
+            st.caption("請輸入各項資產的市場價值占比。程式會將輸入值正規化為總和 100%；請勿將示意數字當成真實市值。")
+            entered_weights = []
+            cols = st.columns(3)
+            for i, asset in enumerate(ASSETS):
+                with cols[i % 3]:
+                    entered_weights.append(
+                        st.number_input(
+                            f"{asset} 權重 (%)",
+                            min_value=0.0, max_value=100.0,
+                            value=round(100.0 / NUM_ASSETS, 2),
+                            step=1.0, key=f"bl_mkt_w_{i}"
+                        )
+                    )
+            weight_sum = float(np.sum(entered_weights))
+            if weight_sum <= 0:
+                st.warning("輸入權重總和為 0，暫時改用等權重代理。")
+                market_weights = np.ones(NUM_ASSETS) / NUM_ASSETS
+            else:
+                market_weights = np.asarray(entered_weights, dtype=float) / weight_sum
+                st.caption(f"輸入合計：{weight_sum:.2f}%；正規化後合計：{market_weights.sum():.2%}")
+
+    try:
+        pi, bl_delta, market_port_return, market_port_variance, raw_delta = calculate_market_prior(
+            MEAN_RETURNS, COV_MATRIX, market_weights,
+            MARKET_RISK_PREMIUM, RISK_FREE_RATE
+        )
+    except Exception as exc:
+        st.error(f"市場均衡報酬計算失敗：{exc}")
+        pi = MEAN_RETURNS.copy()
+        bl_delta = 2.5
+        market_port_return = float(market_weights @ MEAN_RETURNS)
+        market_port_variance = float(market_weights @ COV_MATRIX @ market_weights)
+        raw_delta = np.nan
+
+    st.markdown("#### ② 建立您的投資觀點（Investor Views）")
+    st.caption("選擇想表達觀點的資產，輸入未來一年的年化預期報酬率，並設定對該項觀點的信心。這裡採用絕對觀點，較容易理解及驗證。")
+    default_views = ASSETS[:min(2, NUM_ASSETS)]
+    selected_view_assets = st.multiselect(
+        "選擇要設定觀點的資產",
+        options=ASSETS,
+        default=default_views,
+        key="bl_selected_view_assets"
+    )
+
+    user_view_returns = {}
+    user_confidences = {}
+    if selected_view_assets:
+        for asset in selected_view_assets:
+            idx = ASSETS.index(asset)
+            suggested_return = float(np.clip(pi[idx] * 100, -50.0, 100.0))
+            with st.container(border=True):
+                st.markdown(f"**{asset}**")
+                col_view, col_conf = st.columns(2)
+                with col_view:
+                    q_value = st.number_input(
+                        f"{asset} 預期年化報酬率 (%)",
+                        min_value=-100.0, max_value=200.0,
+                        value=round(suggested_return, 2),
+                        step=0.5, key=f"bl_q_{idx}"
+                    )
+                    if q_value > pi[idx] * 100 + 0.05:
+                        direction = "看好（高於市場均衡報酬）"
+                    elif q_value < pi[idx] * 100 - 0.05:
+                        direction = "看淡（低於市場均衡報酬）"
+                    else:
+                        direction = "中性（接近市場均衡報酬）"
+                with col_conf:
+                    confidence = st.slider(
+                        f"{asset} 觀點信心水準 (%)",
+                        min_value=5, max_value=95, value=60, step=5,
+                        key=f"bl_conf_{idx}"
+                    )
+                    st.caption("信心越高，模型對此項觀點的不確定性設定越低。")
+                user_view_returns[asset] = q_value / 100.0
+                user_confidences[asset] = confidence / 100.0
+                st.caption(f"系統判讀：{direction}；市場均衡報酬為 {pi[idx] * 100:.2f}%。")
+    else:
+        st.info("目前未選擇任何投資觀點，BL 後驗報酬將等於市場均衡報酬。")
+    P, Q, Omega = build_absolute_views(
+        ASSETS, selected_view_assets, user_view_returns, user_confidences,
+        COV_MATRIX, tau=BL_TAU
+    )
+    mu_bl = calculate_black_litterman(pi, COV_MATRIX, P, Q, Omega, tau=BL_TAU)
+
+    # MVO 與 BL 使用相同的風險分數、共變異數矩陣、權重限制及最佳化方法。
+    bl_weights, bl_opt_return, bl_opt_vol = optimize_portfolio_with_returns(
+        mu_bl, risk_norm, COV_MATRIX
+    )
+
+    with st.expander("③ 檢視 BL 模型參數與計算結果", expanded=False):
+        st.write(f"市場投資組合年化報酬（代理）：**{market_port_return:.2%}**")
+        st.write(f"市場投資組合年化變異數：**{market_port_variance:.6f}**")
+        st.write(f"Excel 年化市場風險溢酬：**{MARKET_RISK_PREMIUM:.2%}**")
+        st.write(f"Excel 平均年化無風險利率：**{RISK_FREE_RATE:.2%}**")
+        st.write(f"市場風險趨避係數 δ：**{bl_delta:.4f}**")
+        if np.isfinite(raw_delta) and raw_delta <= 0:
+            st.info("樣本市場超額報酬不為正，程式將 δ 設定為 0.10 的正值下限，以避免負風險趨避係數。")
+        st.write(f"先驗不確定性係數 τ：**{BL_TAU:.2f}**")
+        st.markdown("**市場均衡報酬 Π 與 BL 後驗報酬 μ_BL（年化）**")
+        df_bl_returns = pd.DataFrame({
+            "資產": ASSETS,
+            "市場均衡報酬 Π (%)": pi * 100,
+            "BL 後驗報酬 μ_BL (%)": mu_bl * 100
+        })
+        st.dataframe(
+            df_bl_returns.style.format({
+                "市場均衡報酬 Π (%)": "{:.2f}",
+                "BL 後驗報酬 μ_BL (%)": "{:.2f}"
+            }),
+            use_container_width=True, hide_index=True
+        )
+        if len(selected_view_assets) > 0:
+            st.markdown("**投資觀點矩陣 P、觀點報酬 Q 與不確定性矩陣 Ω**")
+            st.write("P：")
+            st.dataframe(pd.DataFrame(P, columns=ASSETS, index=selected_view_assets), use_container_width=True)
+            st.write("Q（年化報酬）：")
+            st.dataframe(pd.DataFrame({"資產": selected_view_assets, "Q (%)": Q * 100}), use_container_width=True, hide_index=True)
+            st.write("Ω（觀點不確定性）：")
+            st.dataframe(pd.DataFrame(Omega, index=selected_view_assets, columns=selected_view_assets).style.format("{:.6f}"), use_container_width=True)
 
     # 成果橫幅
     st.markdown(f"""
@@ -596,6 +867,97 @@ else:
     )
     st.plotly_chart(fig_alloc, use_container_width=True)
     st.markdown("---")
+
+    # =====================================================
+    # 作業四：MVO vs Black-Litterman 比較
+    # =====================================================
+    st.header("📊 MVO 與 Black–Litterman 模型比較")
+    st.caption("兩種模型採用相同歷史共變異數矩陣、相同問卷風險趨避係數、相同不放空限制；主要差異為預期報酬來源。")
+
+    mvo_sharpe = calculate_portfolio_sharpe(opt_r, opt_vol, RISK_FREE_RATE)
+    bl_sharpe = calculate_portfolio_sharpe(bl_opt_return, bl_opt_vol, RISK_FREE_RATE)
+
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("MVO 年化預期報酬", f"{opt_r:.2%}")
+    metric_cols[1].metric("BL 年化預期報酬", f"{bl_opt_return:.2%}", f"{(bl_opt_return-opt_r)*100:+.2f} 個百分點")
+    metric_cols[2].metric("BL 年化波動率", f"{bl_opt_vol:.2%}", f"{(bl_opt_vol-opt_vol)*100:+.2f} 個百分點")
+    comparison_table = pd.DataFrame({
+        "績效指標": ["年化預期報酬", "年化波動率", "Sharpe Ratio"],
+        "傳統 MVO": [f"{opt_r:.2%}", f"{opt_vol:.2%}", f"{mvo_sharpe:.3f}"],
+        "Black–Litterman": [f"{bl_opt_return:.2%}", f"{bl_opt_vol:.2%}", f"{bl_sharpe:.3f}"]
+    })
+    st.dataframe(comparison_table, use_container_width=True, hide_index=True)
+
+    col_compare1, col_compare2 = st.columns(2)
+    with col_compare1:
+        fig_weights_compare = go.Figure()
+        fig_weights_compare.add_trace(go.Bar(
+            x=ASSETS, y=opt_weights * 100, name="傳統 MVO",
+            marker_color="#0284c7"
+        ))
+        fig_weights_compare.add_trace(go.Bar(
+            x=ASSETS, y=bl_weights * 100, name="Black–Litterman",
+            marker_color="#10b981"
+        ))
+        fig_weights_compare.update_layout(
+            title="MVO vs BL 最適資產權重",
+            barmode="group", template="plotly_white",
+            yaxis_title="配置權重 (%)", xaxis_title="資產",
+            height=390, legend=dict(orientation="h", y=-0.25)
+        )
+        st.plotly_chart(fig_weights_compare, use_container_width=True)
+
+    with col_compare2:
+        fig_returns_compare = go.Figure()
+        fig_returns_compare.add_trace(go.Bar(
+            x=ASSETS, y=pi * 100, name="市場均衡報酬 Π",
+            marker_color="#64748b"
+        ))
+        fig_returns_compare.add_trace(go.Bar(
+            x=ASSETS, y=mu_bl * 100, name="BL 後驗報酬",
+            marker_color="#8b5cf6"
+        ))
+        fig_returns_compare.update_layout(
+            title="市場均衡報酬 vs BL 後驗報酬",
+            barmode="group", template="plotly_white",
+            yaxis_title="年化預期報酬 (%)", xaxis_title="資產",
+            height=390, legend=dict(orientation="h", y=-0.25)
+        )
+        st.plotly_chart(fig_returns_compare, use_container_width=True)
+
+    st.markdown("#### 信心水準敏感度分析")
+    st.caption("固定目前投資觀點 Q 與市場權重，將所有觀點的信心水準統一調整為 30%、60%、90%，觀察 BL 權重如何變化。")
+    sensitivity_rows = []
+    sensitivity_confidences = [0.30, 0.60, 0.90]
+    if selected_view_assets:
+        for conf_level in sensitivity_confidences:
+            sensitivity_map = {asset: conf_level for asset in selected_view_assets}
+            P_s, Q_s, O_s = build_absolute_views(
+                ASSETS, selected_view_assets, user_view_returns,
+                sensitivity_map, COV_MATRIX, tau=BL_TAU
+            )
+            mu_s = calculate_black_litterman(pi, COV_MATRIX, P_s, Q_s, O_s, tau=BL_TAU)
+            w_s, r_s, v_s = optimize_portfolio_with_returns(mu_s, risk_norm, COV_MATRIX)
+            row = {
+                "觀點信心水準": f"{conf_level:.0%}",
+                "組合年化預期報酬": f"{r_s:.2%}",
+                "組合年化波動率": f"{v_s:.2%}"
+            }
+            for i, asset in enumerate(ASSETS):
+                row[f"{asset} 權重"] = f"{w_s[i]:.1%}"
+            sensitivity_rows.append(row)
+        st.dataframe(pd.DataFrame(sensitivity_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("請至少選擇一項投資觀點，才能進行信心水準敏感度分析。")
+
+    st.info(
+        "解讀提醒：BL 的後驗報酬是模型估計值，不代表未來實際報酬保證。"
+        "本版本使用絕對觀點及簡化的信心—Ω 轉換方式；若要進行嚴謹實證研究，"
+        "應另外校準觀點不確定性，並使用樣本外回測比較績效。"
+    )
+
+    st.markdown("---")
+    
     # =====================================================
     # 功能 2：資金與經驗設定
     # =====================================================
