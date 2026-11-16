@@ -112,17 +112,29 @@ def load_and_compute_mpt():
     prices = prices.apply(pd.to_numeric, errors="coerce")
     prices = prices.dropna(axis=1, how="all").dropna(axis=0, how="any")
 
-    if prices.empty or prices.shape[1] == 0:
+        if prices.empty or prices.shape[1] == 0:
         raise ValueError("資產工作表沒有可用的價格資料。")
 
-    returns_df = prices.pct_change().dropna()
-    if returns_df.empty:
-        raise ValueError("價格資料不足，無法計算報酬率。")
+    # 移除價格變動計算產生的正負無限值，再移除不完整的報酬資料列
+    returns_df = (
+        prices.pct_change()
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna(axis=0, how="any")
+    )
+    if len(returns_df) < 2:
+        raise ValueError("有效報酬資料不足，無法計算共變異數矩陣。")
+
+    if not np.isfinite(returns_df.to_numpy()).all():
+        raise ValueError("報酬資料仍含有 NaN 或無限值，請檢查 Excel 價格資料。")
 
     DATA_SOURCE_FILE = file_path
     assets = returns_df.columns.tolist()
     mean_returns = returns_df.mean().to_numpy() * TRADING_DAYS
     cov_matrix = returns_df.cov().to_numpy() * TRADING_DAYS
+
+    if not np.isfinite(cov_matrix).all():
+        raise ValueError("共變異數矩陣含有 NaN 或無限值，請檢查 Excel 價格資料。")
+
     return assets, mean_returns, cov_matrix, returns_df
 DATA_SOURCE_FILE = None
 ASSETS, MEAN_RETURNS, COV_MATRIX, RETURNS_DF = load_and_compute_mpt()
