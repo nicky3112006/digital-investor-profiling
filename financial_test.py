@@ -112,7 +112,7 @@ def load_and_compute_mpt():
     prices = prices.apply(pd.to_numeric, errors="coerce")
     prices = prices.dropna(axis=1, how="all").dropna(axis=0, how="any")
 
-        if prices.empty or prices.shape[1] == 0:
+    if prices.empty or prices.shape[1] == 0:
         raise ValueError("資產工作表沒有可用的價格資料。")
 
     # 移除價格變動計算產生的正負無限值，再移除不完整的報酬資料列
