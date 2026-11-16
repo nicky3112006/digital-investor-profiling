@@ -76,11 +76,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 TRADING_DAYS = 252
+
 def load_and_compute_mpt():
     global DATA_SOURCE_FILE
     import glob
 
-    # 找到同資料夾的 Excel；優先使用投資組合資料檔
     candidates = sorted(glob.glob("*理財機器人投資組合*.xlsx"))
     if not candidates:
         candidates = sorted(glob.glob("*.xlsx"))
@@ -89,53 +89,90 @@ def load_and_compute_mpt():
 
     file_path = candidates[0]
     excel = pd.ExcelFile(file_path, engine="openpyxl")
-    asset_sheets = [name for name in excel.sheet_names if name != "利率"]
-    if not asset_sheets:
-        raise ValueError("Excel 中找不到資產資料工作表（只有「利率」工作表）。")
+    price_series = {}
 
-    # 假設第一個非「利率」工作表包含日期欄及各資產價格欄
-    prices = pd.read_excel(file_path, sheet_name=asset_sheets[0], engine="openpyxl")
-    date_col = "年月日" if "年月日" in prices.columns else prices.columns[0]
+    for sheet_name in excel.sheet_names:
+        # 利率不是股票資料工作表，略過
+        if sheet_name == "利率":
+            continue
 
-    date_text = (
-        prices[date_col].astype(str)
-        .str.replace(r"\.0$", "", regex=True)
-        .str.strip()
-    )
-    dates = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
-    if dates.isna().all():
-        dates = pd.to_datetime(prices[date_col], errors="coerce")
+        sheet = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl")
+        if sheet.empty:
+            continue
 
-    prices = prices.drop(columns=[date_col])
-    prices.index = dates
-    prices = prices.loc[~prices.index.isna()].sort_index()
-    prices = prices.apply(pd.to_numeric, errors="coerce")
-    prices = prices.dropna(axis=1, how="all").dropna(axis=0, how="any")
+        date_col = "年月日" if "年月日" in sheet.columns else sheet.columns[0]
 
-    if prices.empty or prices.shape[1] == 0:
-        raise ValueError("資產工作表沒有可用的價格資料。")
+        date_text = (
+            sheet[date_col].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.strip()
+        )
+        dates = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
+        if dates.isna().all():
+            dates = pd.to_datetime(sheet[date_col], errors="coerce")
 
-    # 移除價格變動計算產生的正負無限值，再移除不完整的報酬資料列
+        # 優先使用還原／調整收盤價；沒有的話使用一般收盤價
+        def close_column_priority(column):
+            name = str(column).lower().replace(" ", "").replace("_", "")
+            if "還原收盤" in name or "調整收盤" in name or "adjustedclose" in name or "adjclose" in name:
+                return 0
+            if "收盤價" in name or name == "收盤" or "close" in name:
+                return 1
+            return 2
+
+        close_columns = [
+            column for column in sheet.columns
+            if close_column_priority(column) < 2
+        ]
+        if not close_columns:
+            # 例如工作表不是股票價格表時，略過
+            continue
+
+        close_col = sorted(close_columns, key=close_column_priority)[0]
+        close = pd.to_numeric(sheet[close_col], errors="coerce")
+
+        stock_prices = pd.DataFrame({
+            "date": dates,
+            "price": close,
+        })
+        stock_prices = stock_prices.dropna(subset=["date", "price"])
+        stock_prices = stock_prices[stock_prices["price"] > 0]
+        stock_prices = stock_prices.drop_duplicates("date", keep="last")
+        stock_prices = stock_prices.set_index("date").sort_index()
+
+        if not stock_prices.empty:
+            # 使用工作表名稱作為股票名稱
+            price_series[sheet_name] = stock_prices["price"]
+
+    if not price_series:
+        raise ValueError(
+            "找不到股票收盤價欄位。請確認每個股票工作表有「年月日」及「收盤價」欄。"
+        )
+
+    # 合併各股票收盤價；欄名為股票工作表名稱
+    prices = pd.concat(price_series, axis=1).sort_index()
+    prices.columns = list(price_series.keys())
+
+    # 由收盤價計算每日報酬率；只保留所有股票都有資料的日期
     returns_df = (
-        prices.pct_change()
+        prices.pct_change(fill_method=None)
         .replace([np.inf, -np.inf], np.nan)
         .dropna(axis=0, how="any")
     )
-    if len(returns_df) < 2:
-        raise ValueError("有效報酬資料不足，無法計算共變異數矩陣。")
+
+    if returns_df.empty or len(returns_df) < 2:
+        raise ValueError("有效的多股票收盤價資料不足，無法計算報酬率與共變異數。")
 
     if not np.isfinite(returns_df.to_numpy()).all():
-        raise ValueError("報酬資料仍含有 NaN 或無限值，請檢查 Excel 價格資料。")
+        raise ValueError("股票報酬資料含有無效數值，請檢查 Excel 收盤價。")
 
     DATA_SOURCE_FILE = file_path
     assets = returns_df.columns.tolist()
     mean_returns = returns_df.mean().to_numpy() * TRADING_DAYS
     cov_matrix = returns_df.cov().to_numpy() * TRADING_DAYS
 
-    if not np.isfinite(cov_matrix).all():
-        raise ValueError("共變異數矩陣含有 NaN 或無限值，請檢查 Excel 價格資料。")
-
     return assets, mean_returns, cov_matrix, returns_df
+
 DATA_SOURCE_FILE = None
 ASSETS, MEAN_RETURNS, COV_MATRIX, RETURNS_DF = load_and_compute_mpt()
 NUM_ASSETS = len(ASSETS)
