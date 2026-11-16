@@ -76,7 +76,54 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 TRADING_DAYS = 252
+def load_and_compute_mpt():
+    global DATA_SOURCE_FILE
+    import glob
 
+    # 找到同資料夾的 Excel；優先使用投資組合資料檔
+    candidates = sorted(glob.glob("*理財機器人投資組合*.xlsx"))
+    if not candidates:
+        candidates = sorted(glob.glob("*.xlsx"))
+    if not candidates:
+        raise FileNotFoundError("找不到資產 Excel 檔案。")
+
+    file_path = candidates[0]
+    excel = pd.ExcelFile(file_path, engine="openpyxl")
+    asset_sheets = [name for name in excel.sheet_names if name != "利率"]
+    if not asset_sheets:
+        raise ValueError("Excel 中找不到資產資料工作表（只有「利率」工作表）。")
+
+    # 假設第一個非「利率」工作表包含日期欄及各資產價格欄
+    prices = pd.read_excel(file_path, sheet_name=asset_sheets[0], engine="openpyxl")
+    date_col = "年月日" if "年月日" in prices.columns else prices.columns[0]
+
+    date_text = (
+        prices[date_col].astype(str)
+        .str.replace(r"\.0$", "", regex=True)
+        .str.strip()
+    )
+    dates = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
+    if dates.isna().all():
+        dates = pd.to_datetime(prices[date_col], errors="coerce")
+
+    prices = prices.drop(columns=[date_col])
+    prices.index = dates
+    prices = prices.loc[~prices.index.isna()].sort_index()
+    prices = prices.apply(pd.to_numeric, errors="coerce")
+    prices = prices.dropna(axis=1, how="all").dropna(axis=0, how="any")
+
+    if prices.empty or prices.shape[1] == 0:
+        raise ValueError("資產工作表沒有可用的價格資料。")
+
+    returns_df = prices.pct_change().dropna()
+    if returns_df.empty:
+        raise ValueError("價格資料不足，無法計算報酬率。")
+
+    DATA_SOURCE_FILE = file_path
+    assets = returns_df.columns.tolist()
+    mean_returns = returns_df.mean().to_numpy() * TRADING_DAYS
+    cov_matrix = returns_df.cov().to_numpy() * TRADING_DAYS
+    return assets, mean_returns, cov_matrix, returns_df
 DATA_SOURCE_FILE = None
 ASSETS, MEAN_RETURNS, COV_MATRIX, RETURNS_DF = load_and_compute_mpt()
 NUM_ASSETS = len(ASSETS)
@@ -288,6 +335,32 @@ def optimize_portfolio_for_user(risk_score_norm):
     res = sco.minimize(utility, init, method='SLSQP', bounds=bounds, constraints=cons)
     r, vol = port_perf(res.x, MEAN_RETURNS, COV_MATRIX)
     return res.x, r, vol
+def optimize_portfolio_with_returns(mean_returns, risk_score_norm, cov_matrix):
+    risk_aversion = 18.0 - (risk_score_norm / 100.0) * (18.0 - 1.5)
+
+    def utility(weights):
+        portfolio_return = np.dot(weights, mean_returns)
+        variance = np.dot(weights.T, np.dot(cov_matrix, weights))
+        return -(portfolio_return - 0.5 * risk_aversion * variance)
+
+    bounds = tuple((0.0, 1.0) for _ in range(len(mean_returns)))
+    constraints = ({"type": "eq", "fun": lambda weights: np.sum(weights) - 1.0},)
+    initial_weights = np.ones(len(mean_returns)) / len(mean_returns)
+
+    result = sco.minimize(
+        utility,
+        initial_weights,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints,
+    )
+    if not result.success:
+        raise RuntimeError(f"投資組合最佳化失敗：{result.message}")
+
+    weights = result.x
+    portfolio_return = float(np.dot(weights, mean_returns))
+    portfolio_vol = float(np.sqrt(weights.T @ cov_matrix @ weights))
+    return weights, portfolio_return, portfolio_vol
 # ---------------------------------------------------------
 # [新增] 計算三種代表性基準投資人（保守 15分、穩健 50分、積極 85分）
 # ---------------------------------------------------------
