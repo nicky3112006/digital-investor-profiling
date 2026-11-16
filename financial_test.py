@@ -415,7 +415,6 @@ def optimize_portfolio_with_returns(mean_returns, risk_score_norm, cov_matrix):
 # ---------------------------------------------------------
 # [新增] 計算三種代表性基準投資人（保守 15分、穩健 50分、積極 85分）
 # ---------------------------------------------------------
-@st.cache_data
 def get_three_benchmark_profiles():
     benchmarks = {
         "Conservative (保守型)": 15.0,
